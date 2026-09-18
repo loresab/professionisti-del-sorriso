@@ -1,0 +1,4 @@
+- Collegare il dominio definitivo
+- Verificare Search Console
+- Aggiornare eventuale indirizzo  quando disponibile
+- Sostituire o aggiungere nuovi casi clinici quando arrivano nuove immagini
