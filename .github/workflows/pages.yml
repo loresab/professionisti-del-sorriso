@@ -1,0 +1,137 @@
+name: Deploy sito su GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepara sito
+        shell: bash
+        run: |
+          set -e
+          rm -rf extracted _site
+          mkdir -p extracted _site
+          unzip -q professionisti-sorriso-site.zip -d extracted
+
+          if [ -f extracted/index.html ]; then
+            cp -a extracted/. _site/
+          else
+            ROOT_DIR="$(find extracted -mindepth 1 -maxdepth 2 -type f -name index.html -printf '%h\n' | head -n 1)"
+            if [ -z "$ROOT_DIR" ]; then
+              echo "index.html non trovato nello ZIP"
+              exit 1
+            fi
+            cp -a "$ROOT_DIR"/. _site/
+          fi
+
+          touch _site/.nojekyll
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          site = Path("_site")
+          index = site / "index.html"
+          css = site / "assets" / "css" / "styles.css"
+
+          html = index.read_text(encoding="utf-8")
+
+          hours_html = """<div class="hours-card">
+          <div class="hours-intro">
+          <span class="eyebrow">Orari</span>
+          <h3>Orari della sede di Napoli</h3>
+          <p>Gli orari riportati sono quelli della sede di Napoli. Per la disponibilità a Teverola, contattaci direttamente su WhatsApp.</p>
+          </div>
+          <div class="hours-list" aria-label="Orari di apertura della sede di Napoli">
+          <div><span>Lunedì</span><strong>Chiuso</strong></div>
+          <div><span>Martedì</span><strong>Chiuso</strong></div>
+          <div><span>Mercoledì</span><strong>10:00 – 20:00</strong></div>
+          <div><span>Giovedì</span><strong>09:00 – 20:00</strong></div>
+          <div><span>Venerdì</span><strong>14:45 – 20:00</strong></div>
+          <div><span>Sabato</span><strong>09:00 – 20:00</strong></div>
+          <div><span>Domenica</span><strong>Chiuso</strong></div>
+          </div>
+          <div class="hours-action"><a class="btn btn-primary" href="https://wa.me/393318665437?text=Buongiorno%2C%20vorrei%20verificare%20gli%20orari%20e%20la%20disponibilit%C3%A0%20dello%20studio." rel="noopener" target="_blank">Verifica disponibilità su WhatsApp</a></div>
+          </div>"""
+
+          if "Orari della sede di Napoli" not in html:
+              marker = '<div class="locations-grid">'
+              start = html.find(marker)
+              if start != -1:
+                  pos = start
+                  depth = 0
+                  token_re = re.compile(r'<div\b[^>]*>|</div>', re.I)
+                  first = True
+                  for m in token_re.finditer(html, start):
+                      token = m.group(0).lower()
+                      if token.startswith("<div"):
+                          depth += 1
+                      else:
+                          depth -= 1
+                          if depth == 0 and not first:
+                              insert_at = m.end()
+                              html = html[:insert_at] + "\n" + hours_html + html[insert_at:]
+                              break
+                      first = False
+
+          # Aggiorna i dati strutturati con gli orari, senza duplicarli.
+          if '"openingHoursSpecification"' not in html and '"@type":["Dentist","LocalBusiness"]' in html:
+              specs = ',"openingHoursSpecification":[{"@type":"OpeningHoursSpecification","dayOfWeek":"Wednesday","opens":"10:00","closes":"20:00"},{"@type":"OpeningHoursSpecification","dayOfWeek":"Thursday","opens":"09:00","closes":"20:00"},{"@type":"OpeningHoursSpecification","dayOfWeek":"Friday","opens":"14:45","closes":"20:00"},{"@type":"OpeningHoursSpecification","dayOfWeek":"Saturday","opens":"09:00","closes":"20:00"}]'
+              html = html.replace(',"areaServed":[{"@type":"City","name":"Napoli"},{"@type":"City","name":"Teverola"}]}', ',"areaServed":[{"@type":"City","name":"Napoli"},{"@type":"City","name":"Teverola"}]' + specs + '}')
+
+          index.write_text(html, encoding="utf-8")
+
+          css.parent.mkdir(parents=True, exist_ok=True)
+          css_text = css.read_text(encoding="utf-8") if css.exists() else ""
+          if ".hours-card" not in css_text:
+              css_text += """
+          .hours-card{margin-top:22px;background:#fff;border:1px solid var(--line);border-radius:24px;padding:26px;box-shadow:var(--shadow);display:grid;grid-template-columns:minmax(0,.9fr) minmax(320px,1.1fr);gap:28px;align-items:start}
+          .hours-intro h3{margin:0 0 10px;font-size:1.5rem}
+          .hours-intro p{margin:0;color:var(--text-soft);max-width:520px}
+          .hours-list{display:grid;gap:0;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#fafdff}
+          .hours-list>div{display:flex;justify-content:space-between;gap:18px;padding:11px 16px;border-bottom:1px solid var(--line)}
+          .hours-list>div:last-child{border-bottom:none}
+          .hours-list span{color:var(--text-soft)}
+          .hours-list strong{color:var(--primary);text-align:right}
+          .hours-action{grid-column:1/-1;display:flex;justify-content:flex-end;margin-top:-6px}
+          @media (max-width:760px){.hours-card{grid-template-columns:1fr;padding:22px}.hours-action{grid-column:auto;justify-content:stretch}.hours-action .btn{width:100%}.hours-list>div{padding:10px 13px}}
+          """
+              css.write_text(css_text, encoding="utf-8")
+          PY
+
+      - name: Configura GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Carica artifact Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./_site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Pubblica
+        id: deployment
+        uses: actions/deploy-pages@v4
